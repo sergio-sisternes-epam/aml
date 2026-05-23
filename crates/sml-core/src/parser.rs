@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ast::{
-    Document, ExecutionPolicy, FailureMode, Node, NodeKind, Param, Span,
-};
+use crate::ast::{Document, ExecutionPolicy, FailureMode, Node, NodeKind, Param, Span};
 
 /// Parse errors with source location.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,11 +83,10 @@ fn parse_nodes(input: &str, base_offset: usize) -> Result<Vec<Node>, ParseError>
 }
 
 fn is_tag_start(s: &str) -> bool {
-    // After "<skill" or "<param", must be whitespace, '>', or '/'
-    let tag = if s.starts_with("<skill") {
-        &s[6..]
-    } else if s.starts_with("<param") {
-        &s[6..]
+    let tag = if let Some(rest) = s.strip_prefix("<skill") {
+        rest
+    } else if let Some(rest) = s.strip_prefix("<param") {
+        rest
     } else {
         return false;
     };
@@ -250,12 +247,10 @@ fn extract_params(input: &str, base_offset: usize) -> Result<(Vec<Param>, ()), P
         if input[pos..].starts_with("<param") && is_tag_start(&input[pos..]) {
             let param_start = pos;
             // Find end of opening tag
-            let tag_end = input[pos..]
-                .find('>')
-                .ok_or_else(|| ParseError {
-                    message: "unclosed <param> tag".to_string(),
-                    span: Span::new(base_offset + pos, base_offset + pos + 10),
-                })?;
+            let tag_end = input[pos..].find('>').ok_or_else(|| ParseError {
+                message: "unclosed <param> tag".to_string(),
+                span: Span::new(base_offset + pos, base_offset + pos + 10),
+            })?;
 
             let attrs_str = &input[pos + 6..pos + tag_end]; // after "<param"
             let attrs = parse_attributes(attrs_str, base_offset + pos + 6)?;
@@ -418,10 +413,7 @@ fn parse_attributes(
     Ok(attrs)
 }
 
-fn build_node_kind(
-    attrs: &HashMap<String, String>,
-    offset: usize,
-) -> Result<NodeKind, ParseError> {
+fn build_node_kind(attrs: &HashMap<String, String>, offset: usize) -> Result<NodeKind, ParseError> {
     if let Some(define) = attrs.get("define") {
         match define.as_str() {
             "interface" => {
@@ -453,7 +445,9 @@ fn build_node_kind(
                 })
             }
             other => Err(ParseError {
-                message: format!("unknown define value: '{other}' (expected 'interface' or 'implementation')"),
+                message: format!(
+                    "unknown define value: '{other}' (expected 'interface' or 'implementation')"
+                ),
                 span: Span::new(offset, offset + 20),
             }),
         }
@@ -473,7 +467,7 @@ fn build_node_kind(
         let policy = attrs
             .get("policy")
             .map(|s| {
-                ExecutionPolicy::from_str(s).ok_or_else(|| ParseError {
+                ExecutionPolicy::parse(s).ok_or_else(|| ParseError {
                     message: format!(
                         "invalid policy value: '{s}' (expected bottom-up, wrapper, or sequential)"
                     ),
@@ -484,7 +478,7 @@ fn build_node_kind(
         let on_failure = attrs
             .get("on-failure")
             .map(|s| {
-                FailureMode::from_str(s).ok_or_else(|| ParseError {
+                FailureMode::parse(s).ok_or_else(|| ParseError {
                     message: format!(
                         "invalid on-failure value: '{s}' (expected halt, skip, or partial)"
                     ),
@@ -495,8 +489,8 @@ fn build_node_kind(
 
         if interface.is_none() && r#impl.is_none() && name.is_none() {
             return Err(ParseError {
-                message:
-                    "invocation requires at least one of: interface, impl, or name".to_string(),
+                message: "invocation requires at least one of: interface, impl, or name"
+                    .to_string(),
                 span: Span::new(offset, offset + 20),
             });
         }
@@ -550,7 +544,9 @@ mod tests {
         assert_eq!(doc.nodes.len(), 1);
         match &doc.nodes[0] {
             Node::Skill { kind, children, .. } => {
-                assert!(matches!(kind, NodeKind::Invocation { interface: Some(i), .. } if i == "code-review"));
+                assert!(
+                    matches!(kind, NodeKind::Invocation { interface: Some(i), .. } if i == "code-review")
+                );
                 assert_eq!(children.len(), 1);
                 assert!(matches!(&children[0], Node::Text(t) if t == "Review this."));
             }
@@ -564,10 +560,10 @@ mod tests {
         let doc = parse(input).unwrap();
         assert_eq!(doc.nodes.len(), 1);
         match &doc.nodes[0] {
-            Node::Skill {
-                kind, children, ..
-            } => {
-                assert!(matches!(kind, NodeKind::Invocation { interface: Some(i), .. } if i == "health-check"));
+            Node::Skill { kind, children, .. } => {
+                assert!(
+                    matches!(kind, NodeKind::Invocation { interface: Some(i), .. } if i == "health-check")
+                );
                 assert!(children.is_empty());
             }
             _ => panic!("expected Skill node"),
@@ -607,7 +603,9 @@ mod tests {
         match &doc.nodes[0] {
             Node::Skill { children, .. } => {
                 assert_eq!(children.len(), 1);
-                assert!(matches!(&children[0], Node::Skill { kind: NodeKind::Invocation { interface: Some(i), .. }, .. } if i == "inner"));
+                assert!(
+                    matches!(&children[0], Node::Skill { kind: NodeKind::Invocation { interface: Some(i), .. }, .. } if i == "inner")
+                );
             }
             _ => panic!("expected Skill node"),
         }

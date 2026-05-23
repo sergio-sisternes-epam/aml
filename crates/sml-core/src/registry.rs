@@ -26,7 +26,10 @@ pub struct ImplementationEntry {
 pub enum RegistryError {
     DuplicateInterface(String),
     DuplicateImplementation(String),
-    ImplementsUnknownInterface { implementation: String, interface: String },
+    ImplementsUnknownInterface {
+        implementation: String,
+        interface: String,
+    },
 }
 
 impl std::fmt::Display for RegistryError {
@@ -38,7 +41,10 @@ impl std::fmt::Display for RegistryError {
             Self::DuplicateImplementation(name) => {
                 write!(f, "duplicate implementation definition: '{name}'")
             }
-            Self::ImplementsUnknownInterface { implementation, interface } => {
+            Self::ImplementsUnknownInterface {
+                implementation,
+                interface,
+            } => {
                 write!(
                     f,
                     "implementation '{implementation}' references unknown interface '{interface}'"
@@ -74,7 +80,8 @@ impl SkillRegistry {
         if self.interfaces.contains_key(&name) {
             return Err(RegistryError::DuplicateInterface(name));
         }
-        self.interfaces.insert(name.clone(), InterfaceEntry { name, description });
+        self.interfaces
+            .insert(name.clone(), InterfaceEntry { name, description });
         Ok(())
     }
 

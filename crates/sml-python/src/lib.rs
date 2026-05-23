@@ -30,11 +30,13 @@ impl Document {
         self.inner
             .definitions()
             .filter_map(|n| match n {
-                Node::Skill { kind: NodeKind::InterfaceDefinition { name, .. }, .. } => {
-                    Some(format!("interface:{name}"))
-                }
                 Node::Skill {
-                    kind: NodeKind::ImplementationDefinition { name, .. }, ..
+                    kind: NodeKind::InterfaceDefinition { name, .. },
+                    ..
+                } => Some(format!("interface:{name}")),
+                Node::Skill {
+                    kind: NodeKind::ImplementationDefinition { name, .. },
+                    ..
                 } => Some(format!("impl:{name}")),
                 _ => None,
             })
@@ -47,7 +49,13 @@ impl Document {
             .invocations()
             .filter_map(|n| match n {
                 Node::Skill {
-                    kind: NodeKind::Invocation { interface, r#impl, name, .. },
+                    kind:
+                        NodeKind::Invocation {
+                            interface,
+                            r#impl,
+                            name,
+                            ..
+                        },
                     ..
                 } => {
                     let target = interface
@@ -74,16 +82,14 @@ struct SmlRegistry {
 impl SmlRegistry {
     #[new]
     fn new() -> Self {
-        Self { inner: RustRegistry::new() }
+        Self {
+            inner: RustRegistry::new(),
+        }
     }
 
     /// Register an interface.
     #[pyo3(signature = (name, description=None))]
-    fn register_interface(
-        &mut self,
-        name: String,
-        description: Option<String>,
-    ) -> PyResult<()> {
+    fn register_interface(&mut self, name: String, description: Option<String>) -> PyResult<()> {
         self.inner
             .register_interface(name, description)
             .map_err(|e| PyValueError::new_err(e.to_string()))
@@ -119,7 +125,11 @@ impl SmlRegistry {
 
     /// Validate the registry (check orphan implementations).
     fn validate(&self) -> Vec<String> {
-        self.inner.validate().iter().map(|e| e.to_string()).collect()
+        self.inner
+            .validate()
+            .iter()
+            .map(|e| e.to_string())
+            .collect()
     }
 }
 
@@ -149,4 +159,3 @@ fn sml(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SmlRegistry>()?;
     Ok(())
 }
-

@@ -6,11 +6,18 @@ pub enum ResolveError {
     /// No implementations found for the interface.
     NoImplementation { interface: String },
     /// Multiple implementations match and none has higher priority.
-    Ambiguous { interface: String, candidates: Vec<String> },
+    Ambiguous {
+        interface: String,
+        candidates: Vec<String>,
+    },
     /// Explicit `impl` not found in registry.
     ImplNotFound { name: String },
     /// Explicit `impl` does not implement the declared interface.
-    ImplMismatch { r#impl: String, expected_interface: String, actual_interface: String },
+    ImplMismatch {
+        r#impl: String,
+        expected_interface: String,
+        actual_interface: String,
+    },
     /// No resolution target (neither interface nor impl nor name).
     NoTarget,
 }
@@ -21,7 +28,10 @@ impl std::fmt::Display for ResolveError {
             Self::NoImplementation { interface } => {
                 write!(f, "no implementation found for interface '{interface}'")
             }
-            Self::Ambiguous { interface, candidates } => {
+            Self::Ambiguous {
+                interface,
+                candidates,
+            } => {
                 write!(
                     f,
                     "ambiguous resolution for interface '{interface}': candidates are [{}]",
@@ -31,14 +41,21 @@ impl std::fmt::Display for ResolveError {
             Self::ImplNotFound { name } => {
                 write!(f, "implementation '{name}' not found in registry")
             }
-            Self::ImplMismatch { r#impl, expected_interface, actual_interface } => {
+            Self::ImplMismatch {
+                r#impl,
+                expected_interface,
+                actual_interface,
+            } => {
                 write!(
                     f,
                     "implementation '{impl}' implements '{actual_interface}', not '{expected_interface}'"
                 )
             }
             Self::NoTarget => {
-                write!(f, "skill invocation has no resolution target (no interface, impl, or name)")
+                write!(
+                    f,
+                    "skill invocation has no resolution target (no interface, impl, or name)"
+                )
             }
         }
     }
@@ -68,9 +85,12 @@ pub fn resolve<'a>(
 ) -> Result<&'a ImplementationEntry, ResolveError> {
     // Priority 1: explicit impl
     if let Some(impl_name) = r#impl {
-        let entry = registry
-            .get_implementation(impl_name)
-            .ok_or_else(|| ResolveError::ImplNotFound { name: impl_name.to_string() })?;
+        let entry =
+            registry
+                .get_implementation(impl_name)
+                .ok_or_else(|| ResolveError::ImplNotFound {
+                    name: impl_name.to_string(),
+                })?;
 
         // If interface is also specified, validate consistency
         if let Some(iface) = interface {
@@ -90,7 +110,9 @@ pub fn resolve<'a>(
         let mut candidates = registry.implementations_for(iface);
 
         if candidates.is_empty() {
-            return Err(ResolveError::NoImplementation { interface: iface.to_string() });
+            return Err(ResolveError::NoImplementation {
+                interface: iface.to_string(),
+            });
         }
 
         // Filter by language hint
@@ -118,7 +140,7 @@ pub fn resolve<'a>(
         }
 
         // Pick by priority
-        candidates.sort_by(|a, b| b.priority.cmp(&a.priority));
+        candidates.sort_by_key(|c| std::cmp::Reverse(c.priority));
 
         if candidates.len() > 1 && candidates[0].priority == candidates[1].priority {
             return Err(ResolveError::Ambiguous {
@@ -134,7 +156,9 @@ pub fn resolve<'a>(
     if let Some(n) = name {
         return registry
             .get_implementation(n)
-            .ok_or_else(|| ResolveError::ImplNotFound { name: n.to_string() });
+            .ok_or_else(|| ResolveError::ImplNotFound {
+                name: n.to_string(),
+            });
     }
 
     Err(ResolveError::NoTarget)
@@ -171,14 +195,23 @@ mod tests {
     #[test]
     fn test_resolve_by_impl() {
         let reg = make_registry();
-        let result = resolve(&reg, None, Some("pytest-impl"), None, &ResolutionHints::default());
+        let result = resolve(
+            &reg,
+            None,
+            Some("pytest-impl"),
+            None,
+            &ResolutionHints::default(),
+        );
         assert_eq!(result.unwrap().name, "pytest-impl");
     }
 
     #[test]
     fn test_resolve_by_interface_with_language_hint() {
         let reg = make_registry();
-        let hints = ResolutionHints { language: Some("python".into()), framework: None };
+        let hints = ResolutionHints {
+            language: Some("python".into()),
+            framework: None,
+        };
         let result = resolve(&reg, Some("testing"), None, None, &hints);
         assert_eq!(result.unwrap().name, "pytest-impl");
     }
@@ -186,7 +219,13 @@ mod tests {
     #[test]
     fn test_resolve_ambiguous() {
         let reg = make_registry();
-        let result = resolve(&reg, Some("testing"), None, None, &ResolutionHints::default());
+        let result = resolve(
+            &reg,
+            Some("testing"),
+            None,
+            None,
+            &ResolutionHints::default(),
+        );
         assert!(matches!(result, Err(ResolveError::Ambiguous { .. })));
     }
 

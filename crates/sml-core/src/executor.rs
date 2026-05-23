@@ -28,9 +28,18 @@ pub enum SkillStatus {
 #[derive(Debug, Clone)]
 pub enum ExecutionError {
     ResolutionFailed(ResolveError),
-    HandlerError { skill: String, message: String },
-    RetriesExhausted { skill: String, attempts: u32 },
-    ChildFailed { skill: String, child_error: Box<ExecutionError> },
+    HandlerError {
+        skill: String,
+        message: String,
+    },
+    RetriesExhausted {
+        skill: String,
+        attempts: u32,
+    },
+    ChildFailed {
+        skill: String,
+        child_error: Box<ExecutionError>,
+    },
 }
 
 impl std::fmt::Display for ExecutionError {
@@ -67,7 +76,10 @@ pub struct ExecutionContext {
 impl ExecutionContext {
     #[must_use]
     pub fn new(registry: SkillRegistry) -> Self {
-        Self { registry, handlers: HashMap::new() }
+        Self {
+            registry,
+            handlers: HashMap::new(),
+        }
     }
 
     /// Register a handler for a specific implementation name.
@@ -88,7 +100,12 @@ impl ExecutionContext {
     fn execute_node(&self, node: &Node) -> Result<String, ExecutionError> {
         match node {
             Node::Text(text) => Ok(text.clone()),
-            Node::Skill { kind, params, children, .. } => {
+            Node::Skill {
+                kind,
+                params,
+                children,
+                ..
+            } => {
                 match kind {
                     // Definition nodes produce no output
                     NodeKind::InterfaceDefinition { .. }
@@ -168,8 +185,10 @@ impl ExecutionContext {
         };
 
         // Build params map
-        let params_map: HashMap<String, String> =
-            params.iter().map(|p| (p.name.clone(), p.value.clone())).collect();
+        let params_map: HashMap<String, String> = params
+            .iter()
+            .map(|p| (p.name.clone(), p.value.clone()))
+            .collect();
 
         // Execute with retry
         let mut last_error = None;
@@ -318,8 +337,7 @@ mod tests {
     #[test]
     fn test_definition_produces_no_output() {
         let ctx = setup_context();
-        let doc =
-            parse(r#"<skill define="interface" name="foo">description</skill>"#).unwrap();
+        let doc = parse(r#"<skill define="interface" name="foo">description</skill>"#).unwrap();
         let result = ctx.execute(&doc).unwrap();
         assert_eq!(result, "");
     }
@@ -338,10 +356,9 @@ mod tests {
             Box::new(|_name, _params, _scope| Err("always fails".to_string())),
         );
 
-        let doc = parse(
-            r#"before <skill interface="failing" on-failure="skip">content</skill> after"#,
-        )
-        .unwrap();
+        let doc =
+            parse(r#"before <skill interface="failing" on-failure="skip">content</skill> after"#)
+                .unwrap();
         let result = ctx.execute(&doc).unwrap();
         assert_eq!(result, "before  after");
     }

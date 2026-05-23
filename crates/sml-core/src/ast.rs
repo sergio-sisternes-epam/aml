@@ -73,7 +73,8 @@ pub enum ExecutionPolicy {
 }
 
 impl ExecutionPolicy {
-    pub fn from_str(s: &str) -> Option<Self> {
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "bottom-up" => Some(Self::BottomUp),
             "wrapper" => Some(Self::Wrapper),
@@ -102,7 +103,8 @@ pub enum FailureMode {
 }
 
 impl FailureMode {
-    pub fn from_str(s: &str) -> Option<Self> {
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "halt" => Some(Self::Halt),
             "skip" => Some(Self::Skip),
@@ -180,9 +182,10 @@ impl Node {
     #[must_use]
     pub fn params_map(&self) -> HashMap<String, String> {
         match self {
-            Node::Skill { params, .. } => {
-                params.iter().map(|p| (p.name.clone(), p.value.clone())).collect()
-            }
+            Node::Skill { params, .. } => params
+                .iter()
+                .map(|p| (p.name.clone(), p.value.clone()))
+                .collect(),
             Node::Text(_) => HashMap::new(),
         }
     }
@@ -202,7 +205,9 @@ impl Document {
 
     /// Iterate over all skill nodes (flat, non-recursive).
     pub fn skill_nodes(&self) -> impl Iterator<Item = &Node> {
-        self.nodes.iter().filter(|n| matches!(n, Node::Skill { .. }))
+        self.nodes
+            .iter()
+            .filter(|n| matches!(n, Node::Skill { .. }))
     }
 
     /// Iterate over all definition nodes.
