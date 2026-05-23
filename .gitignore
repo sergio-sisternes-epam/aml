@@ -1,0 +1,34 @@
+# Build artifacts
+target/
+*.so
+*.dylib
+*.dll
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# APM
+apm_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+lcov.info
+*.profraw
+htmlcov/
+.coverage
