@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::ast::{
-    AgentDirective, AgentMode, DirectiveKind, Document, ExecutionPolicy, FailureMode, Node,
-    NodeKind, Param, SessionDirective, Span, ToolDirective,
+    AgentDirective, AgentMode, DirectiveKind, Document, ExecutionPolicy, FailureMode, IoDecl, Node,
+    NodeKind, Param, ParamDecl, ReturnDecl, SessionDirective, Span, ToolDirective,
 };
 
 /// Recognised tag names in AML.
@@ -381,7 +381,7 @@ fn parse_skill_tag(input: &str, offset: usize) -> Result<(Node, usize), ParseErr
     };
 
     let attrs = parse_attributes(attrs_str, offset + tag_prefix_len)?;
-    let kind = build_node_kind(&attrs, offset)?;
+    let mut kind = build_node_kind(&attrs, offset)?;
 
     if is_self_closing {
         let consumed = tag_end + 1; // include '>'
@@ -402,6 +402,37 @@ fn parse_skill_tag(input: &str, offset: usize) -> Result<(Node, usize), ParseErr
         find_matching_close(tag_name, &input[content_start..], offset + content_start)?;
 
     let content = &input[content_start..content_start + content_end];
+
+    // For interface definitions, parse the body for typed declarations
+    if matches!(kind, NodeKind::InterfaceDefinition { .. }) {
+        let (decl_params, decl_returns, decl_reads, decl_writes, children) =
+            parse_interface_body(content, offset + content_start)?;
+
+        if let NodeKind::InterfaceDefinition {
+            ref mut params,
+            ref mut returns,
+            ref mut reads,
+            ref mut writes,
+            ..
+        } = kind
+        {
+            *params = decl_params;
+            *returns = decl_returns;
+            *reads = decl_reads;
+            *writes = decl_writes;
+        }
+
+        let total_consumed = content_start + content_end + close_tag_end;
+        return Ok((
+            Node::Skill {
+                kind,
+                params: Vec::new(),
+                children,
+                span: Span::new(offset, offset + total_consumed),
+            },
+            total_consumed,
+        ));
+    }
 
     // Parse params from the content
     let (params, _) = extract_params(content, offset + content_start)?;
@@ -524,6 +555,376 @@ fn parse_children_excluding_params(
 
     merge_text_nodes(&mut nodes);
     Ok(nodes)
+}
+
+/// Interface declaration tag names (context-sensitive — only valid inside interface definition bodies).
+const INTERFACE_DECL_TAGS: &[&str] = &["param", "returns", "reads", "writes"];
+
+/// Detect an interface declaration tag at the start of `s`.
+/// Returns the tag name if matched, or `None` for non-declaration content.
+fn detect_interface_decl_tag(s: &str) -> Option<&'static str> {
+    for &tag in INTERFACE_DECL_TAGS {
+        let prefix = format!("<{tag}");
+        if s.starts_with(&prefix) && is_tag_start_after(&s[prefix.len()..]) {
+            return Some(tag);
+        }
+    }
+    None
+}
+
+/// Detect a close tag for an interface declaration tag.
+fn detect_interface_close_tag(s: &str) -> Option<&'static str> {
+    for &tag in INTERFACE_DECL_TAGS {
+        let close = format!("</{tag}>");
+        if s.starts_with(&close) {
+            return Some(tag);
+        }
+    }
+    None
+}
+
+/// Find the next interface declaration tag or AML tag start position.
+fn find_next_interface_tag(s: &str) -> Option<usize> {
+    let mut i = 0;
+    while i < s.len() {
+        if s[i..].starts_with('<') {
+            if detect_interface_decl_tag(&s[i..]).is_some()
+                || detect_interface_close_tag(&s[i..]).is_some()
+                || detect_open_tag(&s[i..]).is_some()
+                || detect_close_tag(&s[i..]).is_some()
+            {
+                return Some(i);
+            }
+            if s[i..].starts_with("<!--") {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Parse the body of an interface definition, extracting typed declarations.
+/// Returns (params, returns, reads, writes, remaining children as text nodes).
+#[allow(clippy::type_complexity)]
+fn parse_interface_body(
+    input: &str,
+    base_offset: usize,
+) -> Result<
+    (
+        Vec<ParamDecl>,
+        Vec<ReturnDecl>,
+        Option<IoDecl>,
+        Option<IoDecl>,
+        Vec<Node>,
+    ),
+    ParseError,
+> {
+    let mut params = Vec::new();
+    let mut returns = Vec::new();
+    let mut reads = None;
+    let mut writes = None;
+    let mut children = Vec::new();
+    let mut pos = 0;
+
+    while pos < input.len() {
+        // Skip comments
+        if input[pos..].starts_with("<!--") {
+            if let Some(end) = input[pos..].find("-->") {
+                pos += end + 3;
+            } else {
+                children.push(Node::Text(input[pos..].to_string()));
+                break;
+            }
+            continue;
+        }
+
+        // Check for interface declaration tags (context-sensitive)
+        if let Some(decl_tag) = detect_interface_decl_tag(&input[pos..]) {
+            match decl_tag {
+                "param" => {
+                    let (decl, consumed) = parse_param_decl(&input[pos..], base_offset + pos)?;
+                    params.push(decl);
+                    pos += consumed;
+                }
+                "returns" => {
+                    let (decl, consumed) = parse_returns_decl(&input[pos..], base_offset + pos)?;
+                    returns.push(decl);
+                    pos += consumed;
+                }
+                "reads" => {
+                    let (decl, consumed) = parse_io_decl(&input[pos..], base_offset + pos)?;
+                    reads = Some(decl);
+                    pos += consumed;
+                }
+                "writes" => {
+                    let (decl, consumed) = parse_io_decl(&input[pos..], base_offset + pos)?;
+                    writes = Some(decl);
+                    pos += consumed;
+                }
+                _ => unreachable!(),
+            }
+            continue;
+        }
+
+        // Skip stray close tags for declaration elements
+        if detect_interface_close_tag(&input[pos..]).is_some() {
+            // Orphan close tag — skip it
+            if let Some(end) = input[pos..].find('>') {
+                pos += end + 1;
+            } else {
+                pos += 1;
+            }
+            continue;
+        }
+
+        // Parse nested skill/directive tags (so the validator can reject them)
+        if let Some(tag) = detect_open_tag(&input[pos..]) {
+            match tag {
+                TagName::Skill => {
+                    let (node, consumed) = parse_skill_tag(&input[pos..], base_offset + pos)?;
+                    children.push(node);
+                    pos += consumed;
+                    continue;
+                }
+                TagName::Tool | TagName::Session | TagName::Agent => {
+                    let (node, consumed) =
+                        parse_directive_tag(tag, &input[pos..], base_offset + pos)?;
+                    children.push(node);
+                    pos += consumed;
+                    continue;
+                }
+                TagName::Param => {
+                    // Already handled above by detect_interface_decl_tag
+                    unreachable!();
+                }
+            }
+        }
+
+        // Collect text content until the next tag
+        let text_end = find_next_interface_tag(&input[pos..]).unwrap_or(input.len() - pos);
+        if text_end > 0 {
+            children.push(Node::Text(decode_entities(&input[pos..pos + text_end])));
+            pos += text_end;
+        } else {
+            children.push(Node::Text(input[pos..pos + 1].to_string()));
+            pos += 1;
+        }
+    }
+
+    merge_text_nodes(&mut children);
+    Ok((params, returns, reads, writes, children))
+}
+
+/// Parse a `<param>` declaration inside an interface definition.
+/// Supports both `<param ... />` (self-closing) and `<param ...>description</param>`.
+fn parse_param_decl(input: &str, base_offset: usize) -> Result<(ParamDecl, usize), ParseError> {
+    let tag_end = find_tag_end(input).ok_or_else(|| ParseError {
+        message: "unclosed <param> declaration tag".to_string(),
+        span: Span::new(base_offset, base_offset + input.len().min(50)),
+    })?;
+
+    let is_self_closing = input[..tag_end].ends_with('/');
+    let attrs_str = if is_self_closing {
+        &input[6..tag_end - 1] // after "<param"
+    } else {
+        &input[6..tag_end]
+    };
+
+    let attrs = parse_attributes(attrs_str, base_offset + 6)?;
+    let name = attrs.get("name").cloned().ok_or_else(|| ParseError {
+        message: "<param> declaration missing 'name' attribute".to_string(),
+        span: Span::new(base_offset, base_offset + tag_end + 1),
+    })?;
+
+    let required = attrs
+        .get("required")
+        .map(|s| match s.as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            other => Err(ParseError {
+                message: format!(
+                    "invalid required value: '{other}' (expected 'true' or 'false')"
+                ),
+                span: Span::new(base_offset, base_offset + tag_end + 1),
+            }),
+        })
+        .transpose()?;
+
+    if is_self_closing {
+        let consumed = tag_end + 1;
+        return Ok((
+            ParamDecl {
+                name,
+                param_type: attrs.get("type").cloned(),
+                required,
+                default: attrs.get("default").cloned(),
+                values: attrs.get("values").cloned(),
+                description: None,
+                span: Span::new(base_offset, base_offset + consumed),
+            },
+            consumed,
+        ));
+    }
+
+    // Find closing </param>
+    let content_start = tag_end + 1;
+    let close_tag = "</param>";
+    let content_end = input[content_start..]
+        .find(close_tag)
+        .ok_or_else(|| ParseError {
+            message: "unclosed <param> declaration tag".to_string(),
+            span: Span::new(base_offset, base_offset + content_start),
+        })?;
+
+    let description = decode_entities(&input[content_start..content_start + content_end]);
+    let description = description.trim().to_string();
+    let consumed = content_start + content_end + close_tag.len();
+
+    Ok((
+        ParamDecl {
+            name,
+            param_type: attrs.get("type").cloned(),
+            required,
+            default: attrs.get("default").cloned(),
+            values: attrs.get("values").cloned(),
+            description: if description.is_empty() {
+                None
+            } else {
+                Some(description)
+            },
+            span: Span::new(base_offset, base_offset + consumed),
+        },
+        consumed,
+    ))
+}
+
+/// Parse a `<returns>` declaration inside an interface definition.
+fn parse_returns_decl(input: &str, base_offset: usize) -> Result<(ReturnDecl, usize), ParseError> {
+    let tag_end = find_tag_end(input).ok_or_else(|| ParseError {
+        message: "unclosed <returns> declaration tag".to_string(),
+        span: Span::new(base_offset, base_offset + input.len().min(50)),
+    })?;
+
+    let is_self_closing = input[..tag_end].ends_with('/');
+    let attrs_str = if is_self_closing {
+        &input[8..tag_end - 1] // after "<returns"
+    } else {
+        &input[8..tag_end]
+    };
+
+    let attrs = parse_attributes(attrs_str, base_offset + 8)?;
+    let name = attrs.get("name").cloned().ok_or_else(|| ParseError {
+        message: "<returns> declaration missing 'name' attribute".to_string(),
+        span: Span::new(base_offset, base_offset + tag_end + 1),
+    })?;
+
+    if is_self_closing {
+        let consumed = tag_end + 1;
+        return Ok((
+            ReturnDecl {
+                name,
+                return_type: attrs.get("type").cloned(),
+                values: attrs.get("values").cloned(),
+                description: None,
+                span: Span::new(base_offset, base_offset + consumed),
+            },
+            consumed,
+        ));
+    }
+
+    let content_start = tag_end + 1;
+    let close_tag = "</returns>";
+    let content_end = input[content_start..]
+        .find(close_tag)
+        .ok_or_else(|| ParseError {
+            message: "unclosed <returns> declaration tag".to_string(),
+            span: Span::new(base_offset, base_offset + content_start),
+        })?;
+
+    let description = decode_entities(&input[content_start..content_start + content_end]);
+    let description = description.trim().to_string();
+    let consumed = content_start + content_end + close_tag.len();
+
+    Ok((
+        ReturnDecl {
+            name,
+            return_type: attrs.get("type").cloned(),
+            values: attrs.get("values").cloned(),
+            description: if description.is_empty() {
+                None
+            } else {
+                Some(description)
+            },
+            span: Span::new(base_offset, base_offset + consumed),
+        },
+        consumed,
+    ))
+}
+
+/// Parse a `<reads>` or `<writes>` declaration inside an interface definition.
+fn parse_io_decl(input: &str, base_offset: usize) -> Result<(IoDecl, usize), ParseError> {
+    let tag_end = find_tag_end(input).ok_or_else(|| ParseError {
+        message: "unclosed I/O declaration tag".to_string(),
+        span: Span::new(base_offset, base_offset + input.len().min(50)),
+    })?;
+
+    // Determine which tag this is (reads or writes) for close-tag matching
+    let tag_name = if input.starts_with("<reads") {
+        "reads"
+    } else {
+        "writes"
+    };
+    let tag_prefix_len = 1 + tag_name.len(); // "<reads" or "<writes"
+
+    let is_self_closing = input[..tag_end].ends_with('/');
+
+    if is_self_closing {
+        // Self-closing: patterns come from a `patterns` attribute
+        let attrs_str = &input[tag_prefix_len..tag_end - 1];
+        let attrs = parse_attributes(attrs_str, base_offset + tag_prefix_len)?;
+        let patterns_str = attrs.get("patterns").cloned().unwrap_or_default();
+        let patterns = parse_io_patterns(&patterns_str);
+        let consumed = tag_end + 1;
+        return Ok((
+            IoDecl {
+                patterns,
+                span: Span::new(base_offset, base_offset + consumed),
+            },
+            consumed,
+        ));
+    }
+
+    // Body form: patterns from text content (comma-separated)
+    let content_start = tag_end + 1;
+    let close_tag = format!("</{tag_name}>");
+    let content_end = input[content_start..]
+        .find(&close_tag)
+        .ok_or_else(|| ParseError {
+            message: format!("unclosed <{tag_name}> declaration tag"),
+            span: Span::new(base_offset, base_offset + content_start),
+        })?;
+
+    let body = &input[content_start..content_start + content_end];
+    let patterns = parse_io_patterns(body);
+    let consumed = content_start + content_end + close_tag.len();
+
+    Ok((
+        IoDecl {
+            patterns,
+            span: Span::new(base_offset, base_offset + consumed),
+        },
+        consumed,
+    ))
+}
+
+/// Parse comma-separated glob patterns from a string, trimming whitespace.
+fn parse_io_patterns(input: &str) -> Vec<String> {
+    input
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn find_next_tag_or_param(s: &str) -> Option<usize> {
@@ -737,6 +1138,10 @@ fn build_node_kind(attrs: &HashMap<String, String>, offset: usize) -> Result<Nod
                 Ok(NodeKind::InterfaceDefinition {
                     name,
                     description: attrs.get("description").cloned(),
+                    params: Vec::new(),
+                    returns: Vec::new(),
+                    reads: None,
+                    writes: None,
                 })
             }
             "implementation" => {
@@ -1445,5 +1850,168 @@ mod tests {
             "should have tool + agent: {:?}",
             non_text
         );
+    }
+
+    // ── Typed interface declaration tests ─────────────────────────────────
+
+    #[test]
+    fn test_interface_with_typed_params() {
+        let doc = parse(r#"<skill define="interface" name="brain-query">
+  <param name="question" type="string" required="true">The question to answer</param>
+  <param name="format" type="enum" values="markdown|table" default="markdown">Output format</param>
+</skill>"#).unwrap();
+
+        if let Node::Skill { kind: NodeKind::InterfaceDefinition { params, .. }, .. } = &doc.nodes[0] {
+            assert_eq!(params.len(), 2);
+            assert_eq!(params[0].name, "question");
+            assert_eq!(params[0].param_type.as_deref(), Some("string"));
+            assert_eq!(params[0].required, Some(true));
+            assert_eq!(params[0].description.as_deref(), Some("The question to answer"));
+            assert_eq!(params[1].name, "format");
+            assert_eq!(params[1].param_type.as_deref(), Some("enum"));
+            assert_eq!(params[1].values.as_deref(), Some("markdown|table"));
+            assert_eq!(params[1].default.as_deref(), Some("markdown"));
+        } else {
+            panic!("expected InterfaceDefinition");
+        }
+    }
+
+    #[test]
+    fn test_interface_with_returns() {
+        let doc = parse(r#"<skill define="interface" name="brain-query">
+  <returns name="answer" type="string">Citation-backed answer</returns>
+  <returns name="quality" type="enum" values="answered|partial|unanswered" />
+</skill>"#).unwrap();
+
+        if let Node::Skill { kind: NodeKind::InterfaceDefinition { returns, .. }, .. } = &doc.nodes[0] {
+            assert_eq!(returns.len(), 2);
+            assert_eq!(returns[0].name, "answer");
+            assert_eq!(returns[0].description.as_deref(), Some("Citation-backed answer"));
+            assert_eq!(returns[1].name, "quality");
+            assert_eq!(returns[1].return_type.as_deref(), Some("enum"));
+            assert_eq!(returns[1].values.as_deref(), Some("answered|partial|unanswered"));
+            assert!(returns[1].description.is_none());
+        } else {
+            panic!("expected InterfaceDefinition");
+        }
+    }
+
+    #[test]
+    fn test_interface_with_reads_writes() {
+        let doc = parse(r#"<skill define="interface" name="brain-query">
+  <reads>wiki/index.md, wiki/**/*.md</reads>
+  <writes>raw/brain-questions.md</writes>
+</skill>"#).unwrap();
+
+        if let Node::Skill { kind: NodeKind::InterfaceDefinition { reads, writes, .. }, .. } = &doc.nodes[0] {
+            let r = reads.as_ref().unwrap();
+            assert_eq!(r.patterns, vec!["wiki/index.md", "wiki/**/*.md"]);
+            let w = writes.as_ref().unwrap();
+            assert_eq!(w.patterns, vec!["raw/brain-questions.md"]);
+        } else {
+            panic!("expected InterfaceDefinition");
+        }
+    }
+
+    #[test]
+    fn test_interface_text_only_body_backward_compat() {
+        let doc = parse(r#"<skill define="interface" name="unit-testing">
+  Execute automated tests and report results.
+</skill>"#).unwrap();
+
+        if let Node::Skill { kind: NodeKind::InterfaceDefinition { params, returns, reads, writes, .. }, children, .. } = &doc.nodes[0] {
+            assert!(params.is_empty());
+            assert!(returns.is_empty());
+            assert!(reads.is_none());
+            assert!(writes.is_none());
+            // Text body should be preserved as children
+            assert!(!children.is_empty());
+            if let Node::Text(t) = &children[0] {
+                assert!(t.contains("Execute automated tests"));
+            }
+        } else {
+            panic!("expected InterfaceDefinition");
+        }
+    }
+
+    #[test]
+    fn test_interface_self_closing_params() {
+        let doc = parse(r#"<skill define="interface" name="test">
+  <param name="x" type="number" />
+  <param name="y" type="boolean" default="false" />
+</skill>"#).unwrap();
+
+        if let Node::Skill { kind: NodeKind::InterfaceDefinition { params, .. }, .. } = &doc.nodes[0] {
+            assert_eq!(params.len(), 2);
+            assert_eq!(params[0].name, "x");
+            assert!(params[0].description.is_none());
+            assert_eq!(params[1].default.as_deref(), Some("false"));
+        } else {
+            panic!("expected InterfaceDefinition");
+        }
+    }
+
+    #[test]
+    fn test_interface_mixed_text_and_declarations() {
+        let doc = parse(r#"<skill define="interface" name="test">
+  A capability that answers questions.
+  <param name="question" type="string" required="true">The question</param>
+  <returns name="answer" type="string" />
+</skill>"#).unwrap();
+
+        if let Node::Skill { kind: NodeKind::InterfaceDefinition { params, returns, .. }, children, .. } = &doc.nodes[0] {
+            assert_eq!(params.len(), 1);
+            assert_eq!(returns.len(), 1);
+            // Text body should still be present
+            let text: String = children.iter().filter_map(|n| match n {
+                Node::Text(t) => Some(t.as_str()),
+                _ => None,
+            }).collect();
+            assert!(text.contains("A capability that answers questions"));
+        } else {
+            panic!("expected InterfaceDefinition");
+        }
+    }
+
+    #[test]
+    fn test_invocation_params_unchanged() {
+        // Invocation params should still work the old way (name + value, no type metadata)
+        let doc = parse(r#"<skill interface="testing" language="python">
+  <param name="target">src/auth.py</param>
+  Run tests for this module.
+</skill>"#).unwrap();
+
+        if let Node::Skill { kind: NodeKind::Invocation { .. }, params, .. } = &doc.nodes[0] {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "target");
+            assert_eq!(params[0].value, "src/auth.py");
+        } else {
+            panic!("expected Invocation");
+        }
+    }
+
+    #[test]
+    fn test_full_brain_query_interface() {
+        let doc = parse(r#"<skill define="interface" name="brain-query">
+  <param name="question" type="string" required="true">The question to answer</param>
+  <param name="format" type="enum" values="markdown|comparison-table|slide-deck|chart" default="markdown">Output format</param>
+  <param name="caller_session_id" type="string" required="false">Set by brain-responder</param>
+  <returns name="answer" type="string">Citation-backed answer</returns>
+  <returns name="quality" type="enum" values="answered|partial|unanswered" />
+  <reads>wiki/index.md, wiki/**/*.md</reads>
+  <writes>raw/brain-questions.md</writes>
+</skill>"#).unwrap();
+
+        if let Node::Skill { kind: NodeKind::InterfaceDefinition { name, params, returns, reads, writes, .. }, .. } = &doc.nodes[0] {
+            assert_eq!(name, "brain-query");
+            assert_eq!(params.len(), 3);
+            assert_eq!(returns.len(), 2);
+            assert!(reads.is_some());
+            assert!(writes.is_some());
+            assert_eq!(reads.as_ref().unwrap().patterns, vec!["wiki/index.md", "wiki/**/*.md"]);
+            assert_eq!(writes.as_ref().unwrap().patterns, vec!["raw/brain-questions.md"]);
+        } else {
+            panic!("expected InterfaceDefinition");
+        }
     }
 }

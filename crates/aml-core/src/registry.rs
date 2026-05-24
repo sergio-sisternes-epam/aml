@@ -1,12 +1,20 @@
 use std::collections::HashMap;
 
-use crate::ast::NodeKind;
+use crate::ast::{IoDecl, NodeKind, ParamDecl, ReturnDecl};
 
 /// Metadata for a registered interface.
 #[derive(Debug, Clone)]
 pub struct InterfaceEntry {
     pub name: String,
     pub description: Option<String>,
+    /// Typed parameter declarations (empty for legacy text-only interfaces).
+    pub params: Vec<ParamDecl>,
+    /// Return value declarations.
+    pub returns: Vec<ReturnDecl>,
+    /// File-read declarations.
+    pub reads: Option<IoDecl>,
+    /// File-write declarations.
+    pub writes: Option<IoDecl>,
 }
 
 /// Metadata for a registered implementation.
@@ -76,12 +84,25 @@ impl SkillRegistry {
         &mut self,
         name: String,
         description: Option<String>,
+        params: Vec<ParamDecl>,
+        returns: Vec<ReturnDecl>,
+        reads: Option<IoDecl>,
+        writes: Option<IoDecl>,
     ) -> Result<(), RegistryError> {
         if self.interfaces.contains_key(&name) {
             return Err(RegistryError::DuplicateInterface(name));
         }
-        self.interfaces
-            .insert(name.clone(), InterfaceEntry { name, description });
+        self.interfaces.insert(
+            name.clone(),
+            InterfaceEntry {
+                name,
+                description,
+                params,
+                returns,
+                reads,
+                writes,
+            },
+        );
         Ok(())
     }
 
@@ -119,9 +140,21 @@ impl SkillRegistry {
     /// Register definitions extracted from AST nodes.
     pub fn register_from_node_kind(&mut self, kind: &NodeKind) -> Result<(), RegistryError> {
         match kind {
-            NodeKind::InterfaceDefinition { name, description } => {
-                self.register_interface(name.clone(), description.clone())
-            }
+            NodeKind::InterfaceDefinition {
+                name,
+                description,
+                params,
+                returns,
+                reads,
+                writes,
+            } => self.register_interface(
+                name.clone(),
+                description.clone(),
+                params.clone(),
+                returns.clone(),
+                reads.clone(),
+                writes.clone(),
+            ),
             NodeKind::ImplementationDefinition {
                 name,
                 implements,
@@ -188,7 +221,7 @@ mod tests {
     #[test]
     fn test_register_and_lookup() {
         let mut reg = SkillRegistry::new();
-        reg.register_interface("testing".into(), Some("Run tests".into()))
+        reg.register_interface("testing".into(), Some("Run tests".into()), Vec::new(), Vec::new(), None, None)
             .unwrap();
         reg.register_implementation(
             "pytest-impl".into(),
@@ -208,8 +241,8 @@ mod tests {
     #[test]
     fn test_duplicate_interface() {
         let mut reg = SkillRegistry::new();
-        reg.register_interface("testing".into(), None).unwrap();
-        let err = reg.register_interface("testing".into(), None).unwrap_err();
+        reg.register_interface("testing".into(), None, Vec::new(), Vec::new(), None, None).unwrap();
+        let err = reg.register_interface("testing".into(), None, Vec::new(), Vec::new(), None, None).unwrap_err();
         assert_eq!(err, RegistryError::DuplicateInterface("testing".into()));
     }
 

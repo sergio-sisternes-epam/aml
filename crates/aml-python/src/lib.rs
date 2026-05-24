@@ -126,7 +126,7 @@ impl AmlRegistry {
     #[pyo3(signature = (name, description=None))]
     fn register_interface(&mut self, name: String, description: Option<String>) -> PyResult<()> {
         self.inner
-            .register_interface(name, description)
+            .register_interface(name, description, Vec::new(), Vec::new(), None, None)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 

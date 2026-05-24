@@ -53,6 +53,14 @@ pub enum NodeKind {
     InterfaceDefinition {
         name: String,
         description: Option<String>,
+        /// Typed parameter declarations (empty for legacy text-only interfaces).
+        params: Vec<ParamDecl>,
+        /// Return value declarations.
+        returns: Vec<ReturnDecl>,
+        /// File-read declarations (glob patterns).
+        reads: Option<IoDecl>,
+        /// File-write declarations (glob patterns).
+        writes: Option<IoDecl>,
     },
     /// An implementation definition — registered but not executed.
     ImplementationDefinition {
@@ -199,6 +207,44 @@ pub enum DirectiveKind {
 pub struct Param {
     pub name: String,
     pub value: String,
+    pub span: Span,
+}
+
+/// A parameter declaration within an interface definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamDecl {
+    pub name: String,
+    /// Type of the parameter: `string`, `enum`, `number`, `boolean`, `path`, `list`.
+    pub param_type: Option<String>,
+    /// Whether the parameter is required (defaults to `false`).
+    pub required: Option<bool>,
+    /// Default value when the parameter is not provided.
+    pub default: Option<String>,
+    /// Pipe-separated allowed values for `enum` type (e.g. `"a|b|c"`).
+    pub values: Option<String>,
+    /// Human-readable description (text content of the tag).
+    pub description: Option<String>,
+    pub span: Span,
+}
+
+/// A return declaration within an interface definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReturnDecl {
+    pub name: String,
+    /// Type of the return value.
+    pub return_type: Option<String>,
+    /// Pipe-separated allowed values for `enum` type.
+    pub values: Option<String>,
+    /// Human-readable description (text content of the tag).
+    pub description: Option<String>,
+    pub span: Span,
+}
+
+/// A file I/O declaration within an interface definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IoDecl {
+    /// Comma-separated glob patterns parsed into individual entries.
+    pub patterns: Vec<String>,
     pub span: Span,
 }
 

@@ -37,12 +37,38 @@ ParamValue     ::= Text                           # no nested skill tags in para
 # --- INTERFACE DEFINITION ---
 # define="interface" is required. name is required.
 # NOT executable. Registered into SkillRegistry during definition extraction phase.
+# Body may contain typed parameter declarations, return declarations,
+# file I/O declarations, and free-form text (all optional).
 InterfaceDef   ::= '<skill' 'define' '=' '"interface"' 'name' '=' QuotedString InterfaceDefAttrs? '>'
-                     Text
+                     InterfaceBody
                    '</skill>'
 
 InterfaceDefAttrs ::= DescriptionAttr?
 DescriptionAttr   ::= 'description' '=' QuotedString
+
+InterfaceBody  ::= (Text | ParamDecl | ReturnsDecl | ReadsDecl | WritesDecl)*
+
+# --- PARAMETER DECLARATIONS (inside interface definitions) ---
+# Declare a named, typed input parameter with optional default and description.
+ParamDecl      ::= '<param' ParamDeclAttrs '>' Text '</param>'
+                 | '<param' ParamDeclAttrs '/>'
+ParamDeclAttrs ::= 'name' '=' QuotedString
+                   ('type' '=' QuotedString)?        # string | enum | number | boolean | path | list
+                   ('required' '=' QuotedString)?    # "true" or "false"
+                   ('default' '=' QuotedString)?
+                   ('values' '=' QuotedString)?      # required when type="enum"; pipe-separated
+
+# --- RETURN DECLARATIONS (inside interface definitions) ---
+ReturnsDecl    ::= '<returns' ReturnsDeclAttrs '>' Text '</returns>'
+                 | '<returns' ReturnsDeclAttrs '/>'
+ReturnsDeclAttrs ::= 'name' '=' QuotedString
+                    ('type' '=' QuotedString)?
+                    ('values' '=' QuotedString)?
+
+# --- FILE I/O DECLARATIONS (inside interface definitions) ---
+# Declare file-read or file-write patterns (comma-separated globs).
+ReadsDecl      ::= '<reads>' Text '</reads>'
+WritesDecl     ::= '<writes>' Text '</writes>'
 
 # --- IMPLEMENTATION DEFINITION ---
 # define="implementation" is required. name and implements are required.

@@ -16,6 +16,45 @@ description: The AML resolution model.
 </skill>
 ```
 
+### Typed Interface Declarations
+
+Interfaces can optionally declare typed parameters, return values, and file I/O patterns — making the contract self-documenting and machine-verifiable.
+
+```xml
+<skill define="interface" name="brain-query">
+  <param name="question" type="string" required="true">The question to answer</param>
+  <param name="format" type="enum" values="markdown|comparison-table|slide-deck|chart" default="markdown">Output format</param>
+  <param name="caller_session_id" type="string" required="false">Set by brain-responder</param>
+  <returns name="answer" type="string">Citation-backed answer</returns>
+  <returns name="quality" type="enum" values="answered|partial|unanswered" />
+  <reads>wiki/index.md, wiki/**/*.md</reads>
+  <writes>raw/brain-questions.md</writes>
+</skill>
+```
+
+#### Parameter types
+
+| Type | Description |
+|------|-------------|
+| `string` | Free-form text (default when `type` is omitted) |
+| `enum` | One of the pipe-separated `values` (e.g. `values="a\|b\|c"`) |
+| `number` | Numeric value |
+| `boolean` | `"true"` or `"false"` |
+| `path` | File or directory path |
+| `list` | List of values |
+
+#### Attributes
+
+- **`required`** — `"true"` or `"false"` (default: `false`)
+- **`default`** — Default value when the parameter is not provided
+- **`values`** — Required for `enum` type; pipe-separated allowed values
+
+#### File I/O declarations
+
+`<reads>` and `<writes>` declare which files the skill reads from or writes to, using comma-separated glob patterns. This replaces the `code_in`/`code_out` naming with honest, descriptive semantics.
+
+> **Backward compatibility:** Interfaces with text-only bodies (no typed declarations) remain fully valid.
+
 ## Defining Implementations
 
 ```xml
